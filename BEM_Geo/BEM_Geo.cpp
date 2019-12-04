@@ -10,9 +10,9 @@
 #include <cassert>
 
 // global constants
-double R = 6378000.; // Earth radius [m]
+double R = 6378000.0; // Earth radius [m]
 double r_remaining = 500000; // [m]
-double GM = 389600.5; // [km^3 * s^(-1)]
+double GM = 398600500000000.0; // [m^3 * s^(-1)]
 double uExact = GM / R; // exact surface potential
 double qExact = GM / (R * R); // surface acceleration
 
@@ -21,6 +21,7 @@ const char* dataFilename = "BL-902.dat";
 // const char* dataFilename = "BL-3602.dat";
 // const char* dataFilename = "BL-8102.dat";
 const char* elemDataFilename = "elem_902.dat";
+// const char* elemDataFilename = "elem_3602.dat";
 const int N = 902; // dataset size;
 const int Nt_max = 7;
 const int NGauss = 7; // number of Gauss points per element
@@ -155,7 +156,6 @@ void printArray2(std::string name, double** A, int printLim) {
 void loadPointData(
 	double* B, double* L, double* H,
 	double* x, double* y, double* z,
-	double* sx, double* sy, double* sz,
 	double* q, double* d2U
 ) {
 	printf("Loading data ... \n");
@@ -188,15 +188,11 @@ void loadPointData(
 			double Q = std::stod(tokens[3]);
 			double D2U = std::stod(tokens[4]);
 
-			sx[i] = (R - r_remaining) * cos(B[i] * M_PI / 180) * cos(L[i] * M_PI / 180);
-			sy[i] = (R - r_remaining) * cos(B[i] * M_PI / 180) * sin(L[i] * M_PI / 180);
-			sz[i] = (R - r_remaining) * sin(B[i] * M_PI / 180);
-
 			x[i] = (R + H[i]) * cos(B[i] * M_PI / 180) * cos(L[i] * M_PI / 180);
 			y[i] = (R + H[i]) * cos(B[i] * M_PI / 180) * sin(L[i] * M_PI / 180);
 			z[i] = (R + H[i]) * sin(B[i] * M_PI / 180);
 
-			q[i] = 0.00001 * Q;
+			q[i] = /* 0.00001 * */ Q;
 			d2U[i] = D2U;
 
 			// std::cout << B << " " << L << " " << H << " " << Q << " " << D2U << std::endl;
@@ -446,10 +442,6 @@ int main() {
 	double* y = new double[N];
 	double* z = new double[N];
 
-	double* sx = new double[N];
-	double* sy = new double[N];
-	double* sz = new double[N];
-
 	double* q = new double[N];
 	double* d2U = new double[N];
 
@@ -458,14 +450,13 @@ int main() {
 	int* e = new int[(size_t)Nt_max * N];
 
 	auto startLoad = std::chrono::high_resolution_clock::now();
-	loadPointData(B, L, H, x, y, z, sx, sy, sz, q, d2U);
+	loadPointData(B, L, H, x, y, z, q, d2U);
 	loadElemData(e);
 	auto endLoad = std::chrono::high_resolution_clock::now();
 
 	auto startPrint3 = std::chrono::high_resolution_clock::now();
 	printArrayVector3("x", x, y, z, 5);
 	auto endPrint3 = std::chrono::high_resolution_clock::now();
-	printArrayVector3("s", sx, sy, sz, 5);
 
 	auto startPrint1 = std::chrono::high_resolution_clock::now();
 	printArray1("q", q, 5);
@@ -498,7 +489,7 @@ int main() {
 	double e0x, e0y, e0z, e1x, e1y, e1z, e2x, e2y, e2z; // triangle edges
 	double alpha_t, beta_t, l0_t, l1_t, l2_t; // singular triangle features (angle at vertex,  angle at adjacent vertex,  opposing edge length)
 	double A_t, K_ijt, norm;
-	double G_sum, F_sum, Gauss_sum;
+	double G_sum, F_sum, Gauss_sum_G, Gauss_sum_F;
 	double t0x, t0y, t0z, t1x, t1y, t1z, t2x, t2y, t2z;
 	int j1, j2;
 
@@ -567,7 +558,8 @@ int main() {
 					// adjacent vertex indices
 					j1 = e[Nt_max * j + t];
 					j2 = e[Nt_max * j + t % Ntri + 1];
-					Gauss_sum = 0.0;
+					Gauss_sum_G = 0.0;
+					Gauss_sum_F = 0.0;
 
 					for (k = 0; k < NGauss; k++) { // cycle through all Gauss pts of a triangle
 
@@ -579,7 +571,8 @@ int main() {
 
 						assert(norm != 0.0);
 
-						Gauss_sum += etha_1[k] / (norm * norm * norm) * w[k];
+						Gauss_sum_F += etha_1[k] / (norm * norm * norm) * w[k];
+						Gauss_sum_G += etha_1[k] / norm * w[k];
 					}
 
 					// tri verts
@@ -602,11 +595,12 @@ int main() {
 					nz /= norm;
 
 					K_ijt = fabs(rx * nx + ry * ny + rz * nz);
+					// K_ijt = rx * nx + ry * ny + rz * nz;
 
-					G_sum += A_t * Gauss_sum;
-					F_sum += A_t * K_ijt * Gauss_sum;
+					// assert(K_ijt >= 0.0);
 
-					assert(F_sum >= 0.0);
+					G_sum += A_t * Gauss_sum_G;
+					F_sum += A_t * K_ijt * Gauss_sum_F;
 				}
 				// ------- end regular triangle cycle --------
 			}
@@ -648,6 +642,7 @@ int main() {
 	printArray2("F", F, 4);
 	auto endMatrixPrint = std::chrono::high_resolution_clock::now();
 	printArray2("G", G, 4);
+	printArray1("rhs", rhs, 4, false);
 
 	// ============================================================================================================
 	// ========== END BOUNDARY ELEM METHOD ========================================================================
@@ -655,10 +650,6 @@ int main() {
 	double* u = new double[N]; // potential solution
 
 	// Bi-CGSTAB solve:
-	// NOTE: This has to be done inside the main() function
-	// auto startBi_CGSTAB = std::chrono::high_resolution_clock::now();
-	// Bi_CGSTAB_solve(dG, q, alphas); // you had a good life, but I can't use you! :'(
-	// auto endBi_CGSTAB = std::chrono::high_resolution_clock::now();
 
 	// =========================================================================================
 	// ========== Bi-CGSTAB Implementation inside main() =======================================
@@ -666,7 +657,7 @@ int main() {
 
 	// ctrl. constants
 	int maxIter = 100;
-	double tol = 1e-5;
+	double tol = 1e-6;
 
 	// iter vectors
 	double* x_curr = new double[N];
@@ -689,7 +680,7 @@ int main() {
 	double alpha, beta, omega;
 
 	// x0 = (1000,1000,...,1000)
-	for (int i = 0; i < N; i++) x_curr[i] = 1000.;
+	for (int i = 0; i < N; i++) x_curr[i] = 10000.;
 	// r0 = b - A x0
 	// choose rp0 such that <r0, rp0> != 0
 	// p0 = r0
@@ -867,7 +858,6 @@ int main() {
 
 	// clean up
 	delete[] x; delete[] y; delete[] z;
-	delete[] sx; delete[] sy; delete[] sz;
 	delete[] q; delete[] d2U;
 
 	for (int i = 0; i < N; i++) {

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <cassert>
 
 // global constants
 double R = 6378000.; // Earth radius [m]
@@ -19,7 +20,52 @@ const char* dataFilename = "BL-902.dat";
 // const char* dataFilename = "BL-1298.dat";
 // const char* dataFilename = "BL-3602.dat";
 // const char* dataFilename = "BL-8102.dat";
-int N = 902; // dataset size;
+const char* elemDataFilename = "elem_902.dat";
+const int N = 902; // dataset size;
+const int Nt_max = 7;
+const int NGauss = 7; // number of Gauss points per element
+
+// Homogeneous coordinates of Gauss' points on a triangular element
+const double etha_1 [NGauss] = {
+	0.333333333, 0.79742699, 0.10128651, 0.10128651, 0.05971587, 0.47014206, 0.47014206
+};
+const double etha_2 [NGauss] = {
+	0.333333333, 0.10128651, 0.79742699, 0.10128651, 0.47014206, 0.05971587, 0.47014206
+};
+const double etha_3 [NGauss] = {
+	0.333333333, 0.10128651, 0.10128651, 0.79742699, 0.47014206, 0.47014206, 0.05971587
+};
+
+// Gauss' weights
+const double w[NGauss] = {
+	0.225000000, 0.12593918, 0.12593918, 0.12593918, 0.13239415, 0.13239415, 0.13239415
+};
+
+void printExactSol(std::string name, int printLim, bool inRow = true) {
+	if (inRow) {
+		std::cout << name << " = " << std::endl;
+		for (int i = 0; i < printLim; i++) {
+			std::cout << " " << uExact;
+		}
+		std::cout << "  ... ";
+		for (int i = N - printLim; i < N; i++) {
+			std::cout << " " << uExact;
+		}
+		std::cout << std::endl;
+	}
+	else {
+		std::string offset = std::string((name + " = ").length() + 1, ' ');
+		std::cout << name << " = " << std::endl;
+		for (int i = 0; i < printLim; i++) {
+			std::cout << offset << uExact << std::endl;
+		}
+		for (int i = 0; i < 3; i++) std::cout << offset << "  ." << std::endl;
+		for (int i = N - printLim; i < N; i++) {
+			std::cout << offset << uExact << std::endl;
+		}
+		std::cout << std::endl;
+	}
+}
 
 void printArray1(std::string name, double* a, int printLim, bool inRow = true) {
 	if (inRow) {
@@ -56,6 +102,23 @@ void printArrayVector3(std::string name, double* vx, double* vy, double* vz, int
 	for (int i = 0; i < 3; i++) std::cout << offset << "  ." << std::endl;
 	for (int i = N - printLim; i < N; i++) {
 		std::cout << offset << vx[i] << " " << vy[i] << " " << vz[i] << std::endl;
+	}
+	std::cout << std::endl;
+}
+
+void printVertNeighborArray(std::string name, int* e, int printLim) {
+	std::string offset = std::string((name + " = ").length() + 1, ' ');
+	std::cout << name << " = " << std::endl;
+	for (int i = 0; i < printLim; i++) {
+		std::cout << offset << e[7 * i] << offset << " : " << offset;
+		for (int j = 1; j < 7; j++) std::cout << e[7 * i + j] << " ";
+		std::cout << std::endl;
+	}
+	for (int i = 0; i < 3; i++) std::cout << offset << "  ." << std::endl;
+	for (int i = N - printLim; i < N; i++) {
+		std::cout << offset << e[7 * i] << offset << " : " << offset;
+		for (int j = 1; j < 7; j++) std::cout << e[7 * i + j] << " ";
+		std::cout << std::endl;
 	}
 	std::cout << std::endl;
 }
@@ -138,6 +201,40 @@ void loadPointData(
 
 			// std::cout << B << " " << L << " " << H << " " << Q << " " << D2U << std::endl;
 			// std::cout << sx[i] << " " << sy[i] << " " << sz[i] << " " << x[i] << " " << y[i] << " " << z[i] << " " << q[i] << " " << d2U[i] << std::endl << std::endl;
+			i++;
+		}
+
+		dataFile.close();
+	}
+}
+
+void loadElemData(int* e) {
+	printf("Loading elem data ... \n");
+
+	std::fstream dataFile;
+	dataFile.open(elemDataFilename, std::fstream::in);
+
+	if (!dataFile.is_open()) {
+		printf("Unable to open file %s\n", elemDataFilename);
+	}
+	else {
+		printf("%s opened successfully\n", elemDataFilename);
+
+		std::string line;
+		int i = 0, j;
+
+		while (std::getline(dataFile, line)) {
+			std::vector<std::string> tokens;
+			std::string s_delimiter = " ";
+			size_t pos = 0;
+			while (pos < 100) {
+				pos = line.find(s_delimiter);
+				tokens.push_back(line.substr(0, line.find(s_delimiter)));
+				line = line.erase(0, pos + s_delimiter.length());
+			}
+
+			for (j = 0; j < tokens.size(); j++) e[7 * i + j] = (std::stoi(tokens[j]) - (j > 0 ? 1 : 0));
+
 			i++;
 		}
 
@@ -339,6 +436,8 @@ void writeData(double* B, double* L, double* u) {
 }
 
 int main() {
+	// point data
+
 	double* B = new double[N];
 	double* L = new double[N];
 	double* H = new double[N];
@@ -354,8 +453,13 @@ int main() {
 	double* q = new double[N];
 	double* d2U = new double[N];
 
+	// elem data
+
+	int* e = new int[(size_t)Nt_max * N];
+
 	auto startLoad = std::chrono::high_resolution_clock::now();
 	loadPointData(B, L, H, x, y, z, sx, sy, sz, q, d2U);
+	loadElemData(e);
 	auto endLoad = std::chrono::high_resolution_clock::now();
 
 	auto startPrint3 = std::chrono::high_resolution_clock::now();
@@ -368,52 +472,186 @@ int main() {
 	auto endPrint1 = std::chrono::high_resolution_clock::now();
 	printArray1("d2U/dn2", d2U, 5);
 
-	double** dG = new double* [N];
+	printVertNeighborArray("e", e, 7);
+
+
+
+	// ==============================================================================================================
+	// ========== BOUNDARY ELEMENT METHOD ===========================================================================
+
+
+	// Generating system matrices from point and elem data:
+
+	auto startMatrixGen = std::chrono::high_resolution_clock::now();
+
+	double** F = new double* [N];
 	double** G = new double* [N];
 	for (int i = 0; i < N; i++) {
-		dG[i] = new double[N];
+		F[i] = new double[N];
 		G[i] = new double[N];
 	}
 
-	auto startMatrixGen = std::chrono::high_resolution_clock::now();
-	// getMatrices(dG, G, x, y, z, sx, sy, sz); // :(
-	// Calculating system matrices from point data:
+	int Ntri, i, j, t, k;
+	double rx, ry, rz; // r_ij distance coords
+	double nx, ny, nz;
+	double x_ijk, y_ijk, z_ijk; // Gauss pts
+	double e0x, e0y, e0z, e1x, e1y, e1z, e2x, e2y, e2z; // triangle edges
+	double alpha_t, beta_t, l0_t, l1_t, l2_t; // singular triangle features (angle at vertex,  angle at adjacent vertex,  opposing edge length)
+	double A_t, K_ijt, norm;
+	double G_sum, F_sum, Gauss_sum;
+	double t0x, t0y, t0z, t1x, t1y, t1z, t2x, t2y, t2z;
+	int j1, j2;
 
-	for (int i = 0; i < N; i++) {
-		for (int j = 0; j < N; j++) {
-			double dx = x[i] - sx[j];
-			double dy = y[i] - sy[j];
-			double dz = z[i] - sz[j];
+	for (i = 0; i < N; i++) {
+		for (j = 0; j < N; j++) {
+			rx = x[j] - x[i];
+			ry = y[j] - y[i];
+			rz = z[j] - z[i];
+			
+			Ntri = e[Nt_max * j];
 
-			double d_norm = sqrt(dx * dx + dy * dy + dz * dz);
+			G_sum = 0.0; F_sum = 0.0;
 
-			double nx = sx[i] / (R - r_remaining);
-			double ny = sy[i] / (R - r_remaining);
-			double nz = sz[i] / (R - r_remaining);
+			if (i == j) {
+				for (t = 1; t <= Ntri; t++) { // SINGULAR cycle through all j=i-adjacent triangles
 
-			double dot = dx * nx + dy * ny + dz * nz;
+					// adjacent vertex indices
+					j1 = e[Nt_max * j + t];
+					j2 = e[Nt_max * j + t % Ntri + 1];
 
-			dG[i][j] = dot / (4 * M_PI * d_norm * d_norm * d_norm); // dG[i][j]/dn[i]
-			G[i][j] = 1 / (4 * M_PI * d_norm);
-			if (isnan(dG[i][j])) {
-				std::cout << "NAN!: dG[" << i << "][" << j << "] : d_norm = " << d_norm << std::endl;
-				std::cout << "dx = " << dx << ", dy = " << dy << ", dz = " << dz << std::endl;
+					// compute edge coords
+					// e0 = t0 -> t1
+					e0x = x[j1] - x[j];
+					e0y = y[j1] - y[j];
+					e0z = z[j1] - z[j];
+					// e1 = t1 -> t2
+					e1x = x[j2] - x[j1];
+					e1y = y[j2] - y[j1];
+					e1z = z[j2] - z[j1];
+					// e2 = t2 -> t0
+					e2x = x[j] - x[j2];
+					e2y = y[j] - y[j2];
+					e2z = z[j] - z[j2];
+
+					// edge lengths
+					l0_t = sqrt(e0x * e0x + e0y * e0y + e0z * e0z);
+					l1_t = sqrt(e1x * e1x + e1y * e1y + e1z * e1z);
+					l2_t = sqrt(e2x * e2x + e2y * e2y + e2z * e2z);
+
+					assert(l0_t != 0.0 && l1_t != 0.0 && l2_t != 0.0);
+					
+					alpha_t = acos(-(e0x * e2x + e0y * e2y + e0z * e2z) / (l0_t * l2_t));
+					beta_t = acos(-(e0x * e1x + e0y * e1y + e0z * e1z) / (l0_t * l1_t));
+
+					// tri verts
+					t0x = x[j];		t0y = y[j];		t0z = z[j];
+					t1x = x[j1];	t1y = y[j1];	t1z = z[j1];
+					t2x = x[j2];	t2y = y[j2];	t2z = z[j2];
+
+					// tri normal
+					nx = (t1y - t0y) * (t2z - t0z) - (t1z - t0z) * (t2y - t0y);
+					ny = (t1z - t0z) * (t2x - t0x) - (t1x - t0x) * (t2z - t0z);
+					nz = (t1x - t0x) * (t2y - t0y) - (t1y - t0y) * (t2x - t0x);
+
+					norm = sqrt(nx * nx + ny * ny + nz * nz);
+					A_t = 0.5 * norm; // triangle area
+
+					assert(norm != 0.0);
+
+					G_sum += A_t / l1_t * log(tan(0.5 * (alpha_t + beta_t)) / tan(0.5 * beta_t));
+				}
 			}
-			if (isnan(G[i][j])) {
-				std::cout << "NAN!: G[" << i << "][" << j << "] : d_norm = " << d_norm << std::endl;
-				std::cout << "dx = " << dx << ", dy = " << dy << ", dz = " << dz << std::endl;
+			else {
+				for (t = 1; t <= Ntri; t++) { // REGULAR cycle through all j-adjacent triangles
+
+					// adjacent vertex indices
+					j1 = e[Nt_max * j + t];
+					j2 = e[Nt_max * j + t % Ntri + 1];
+					Gauss_sum = 0.0;
+
+					for (k = 0; k < NGauss; k++) { // cycle through all Gauss pts of a triangle
+
+						x_ijk = etha_1[k] * x[j] + etha_2[k] * x[j1] + etha_3[k] * x[j2] - x[i];
+						y_ijk = etha_1[k] * y[j] + etha_2[k] * y[j1] + etha_3[k] * y[j2] - y[i];
+						z_ijk = etha_1[k] * z[j] + etha_2[k] * z[j1] + etha_3[k] * z[j2] - z[i];
+
+						norm = sqrt(x_ijk * x_ijk + y_ijk * y_ijk + z_ijk * z_ijk);
+
+						assert(norm != 0.0);
+
+						Gauss_sum += etha_1[k] / (norm * norm * norm) * w[k];
+					}
+
+					// tri verts
+					t0x = x[j];		t0y = y[j];		t0z = z[j];
+					t1x = x[j1];	t1y = y[j1];	t1z = z[j1];
+					t2x = x[j2];	t2y = y[j2];	t2z = z[j2];
+
+					// tri normal
+					nx = (t1y - t0y) * (t2z - t0z) - (t1z - t0z) * (t2y - t0y);
+					ny = (t1z - t0z) * (t2x - t0x) - (t1x - t0x) * (t2z - t0z);
+					nz = (t1x - t0x) * (t2y - t0y) - (t1y - t0y) * (t2x - t0x);
+
+					norm = sqrt(nx * nx + ny * ny + nz * nz);
+					A_t = 0.5 * norm; // triangle area
+
+					assert(norm != 0.0);
+
+					nx /= norm;
+					ny /= norm;
+					nz /= norm;
+
+					K_ijt = fabs(rx * nx + ry * ny + rz * nz);
+
+					G_sum += A_t * Gauss_sum;
+					F_sum += A_t * K_ijt * Gauss_sum;
+
+					assert(F_sum >= 0.0);
+				}
+				// ------- end regular triangle cycle --------
 			}
+
+			G[i][j] = 1.0 / (4 * M_PI) * G_sum;
+			F[i][j] = 1.0 / (4 * M_PI) * F_sum;
 		}
+	}
+
+	for (i = 0; i < N; i++) { // filling in the diagonal terms of F
+
+		F_sum = 0.0;
+
+		for (j = 0; j < N; j++) {
+			if (i == j) continue;
+
+			F_sum += F[i][j];
+		}
+
+		F[i][i] = 1.0 - F_sum;
 	}
 
 	auto endMatrixGen = std::chrono::high_resolution_clock::now();
 
+	// ================ rhs = G . q ===============================================
+
+	double* rhs = new double[N];
+
+	for (i = 0; i < N; i++) {
+		G_sum = 0.0;
+		for (j = 0; j < N; j++) {
+			G_sum += G[i][j] * q[j];
+		}
+		rhs[i] = G_sum;
+	}
+
+
 	auto startMatrixPrint = std::chrono::high_resolution_clock::now();
-	printArray2("dG/dn", dG, 4);
+	printArray2("F", F, 4);
 	auto endMatrixPrint = std::chrono::high_resolution_clock::now();
 	printArray2("G", G, 4);
 
-	double* alphas = new double[N]; // unknown alpha coeffs
+	// ============================================================================================================
+	// ========== END BOUNDARY ELEM METHOD ========================================================================
+
 	double* u = new double[N]; // potential solution
 
 	// Bi-CGSTAB solve:
@@ -458,14 +696,14 @@ int main() {
 	for (int i = 0; i < N; i++) {
 		r_curr[i] = q[i];
 		for (int j = 0; j < N; j++) {
-			r_curr[i] -= dG[i][j] * x_curr[j];
+			r_curr[i] -= F[i][j] * x_curr[j];
 		}
 		rp0[i] = r_curr[i] + 100;
 		p_curr[i] = r_curr[i];
 	}
 	std::cout << "==================================================" << std::endl;
 	std::cout << "----------- Initializing Bi-CGSTAB Method --------" << std::endl;
-	printArray2("systemMatrix", dG, 4);
+	printArray2("systemMatrix", F, 4);
 	printArray1("systemRhs", q, 5);
 	printArray1("x0", x_curr, 2);
 	printArray1("r0", r_curr, 5);
@@ -482,7 +720,7 @@ int main() {
 		for (int i = 0; i < N; i++) {
 			tmp[i] = 0.;
 			for (int j = 0; j < N; j++) {
-				tmp[i] += dG[i][j] * p_curr[j];
+				tmp[i] += F[i][j] * p_curr[j];
 			}
 			num += r_curr[i] * rp0[i];
 			den += tmp[i] * rp0[i];
@@ -514,7 +752,7 @@ int main() {
 		for (int i = 0; i < N; i++) {
 			tmp[i] = 0;
 			for (int j = 0; j < N; j++) {
-				tmp[i] += dG[i][j] * s[j];
+				tmp[i] += F[i][j] * s[j];
 			}
 			num += tmp[i] * s[i];
 			den += tmp[i] * tmp[i];
@@ -555,7 +793,7 @@ int main() {
 		for (int i = 0; i < N; i++) {
 			tmp[i] = 0;
 			for (int j = 0; j < N; j++) {
-				tmp[i] += dG[i][j] * p_curr[j];
+				tmp[i] += F[i][j] * p_curr[j];
 			}
 			p_next[i] = r_next[i] + beta * (p_curr[i] - omega * tmp[i]);
 		}
@@ -581,7 +819,7 @@ int main() {
 	}
 
 	// result: x = x_next
-	for (int i = 0; i < N; i++) alphas[i] = x_next[i];
+	for (int i = 0; i < N; i++) u[i] = x_next[i];
 
 	// clean up
 	delete[] x_curr; delete[] x_next;
@@ -593,30 +831,21 @@ int main() {
 	// ========================= Solution done ===============================================
 
 	// print solution
-	printArray1("alphas", alphas, 8);
+	printArray1("u", u, 4);
 
-	// potential solution G . alphas = u
-	auto startMMult = std::chrono::high_resolution_clock::now();
-
-	for (int i = 0; i < N; i++) {
-		u[i] = 0;
-		for (int j = 0; j < N; j++) {
-			u[i] += G[i][j] * alphas[j];
-		}
-	}
-
-	auto endMMult = std::chrono::high_resolution_clock::now();
-
-	printArray1("u", u, 8);
+	// print exact solution
+	printExactSol("uExact", 4);
 
 	writeData(B, L, u);
+
+	auto endWrite = std::chrono::high_resolution_clock::now();
 
 	// ================================ Summary ============================================
 
 	printf("\n============================================================================\n");
 	printf("======================= Program summary =====================================\n");
 	std::cout << "data size = " << N << std::endl;
-	std::chrono::duration<double> elapsedTotal = (endMMult - startLoad);
+	std::chrono::duration<double> elapsedTotal = (endWrite - startLoad);
 	std::cout << "total runtime :    " << elapsedTotal.count() << " s" << std::endl;
 	std::cout << "--------------------------------------------------------------------------" << std::endl;
 	std::chrono::duration<double> elapsedLoad = (endLoad - startLoad);
@@ -630,8 +859,6 @@ int main() {
 	std::cout << "..........................................................................." << std::endl;
 	std::chrono::duration<double> elapsedMatrixGen = (endMatrixGen - startMatrixGen);
 	std::cout << "generating system matrix :    " << elapsedMatrixGen.count() << " s" << std::endl;
-	std::chrono::duration<double> elapsedMMult = (endMMult - startMMult);
-	std::cout << "matrix * vector multiplication :    " << elapsedMMult.count() << " s" << std::endl;
 	std::cout << ".... Bi-CGSTAB: .........................................................." << std::endl;
 	std::chrono::duration<double> elapsedBi_CGSTAB = (endBi_CGSTAB - startBi_CGSTAB);
 	std::cout << "Bi-CGSTAB solution :    " << elapsedBi_CGSTAB.count() << " s" << std::endl;
@@ -644,9 +871,9 @@ int main() {
 	delete[] q; delete[] d2U;
 
 	for (int i = 0; i < N; i++) {
-		delete[] dG[i]; delete[] G[i];
+		delete[] F[i]; delete[] G[i];
 	}
-	delete[] dG; delete[] G;
+	delete[] F; delete[] G;
 
 	return 1;
 }

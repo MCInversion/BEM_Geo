@@ -192,7 +192,7 @@ void loadPointData(
 			y[i] = (R + H[i]) * cos(B[i] * M_PI / 180) * sin(L[i] * M_PI / 180);
 			z[i] = (R + H[i]) * sin(B[i] * M_PI / 180);
 
-			q[i] = /* 0.00001 * */ Q;
+			q[i] = 0.00001 * Q;
 			d2U[i] = D2U;
 
 			// std::cout << B << " " << L << " " << H << " " << Q << " " << D2U << std::endl;
@@ -680,12 +680,12 @@ int main() {
 	double alpha, beta, omega;
 
 	// x0 = (1000,1000,...,1000)
-	for (int i = 0; i < N; i++) x_curr[i] = 10000.;
+	for (int i = 0; i < N; i++) x_curr[i] = 600000.;
 	// r0 = b - A x0
 	// choose rp0 such that <r0, rp0> != 0
 	// p0 = r0
 	for (int i = 0; i < N; i++) {
-		r_curr[i] = q[i];
+		r_curr[i] = rhs[i];
 		for (int j = 0; j < N; j++) {
 			r_curr[i] -= F[i][j] * x_curr[j];
 		}
@@ -695,7 +695,7 @@ int main() {
 	std::cout << "==================================================" << std::endl;
 	std::cout << "----------- Initializing Bi-CGSTAB Method --------" << std::endl;
 	printArray2("systemMatrix", F, 4);
-	printArray1("systemRhs", q, 5);
+	printArray1("systemRhs", rhs, 5);
 	printArray1("x0", x_curr, 2);
 	printArray1("r0", r_curr, 5);
 
@@ -724,7 +724,7 @@ int main() {
 			s[i] = r_curr[i] - alpha * tmp[i];
 		}
 
-		double norm = vectorNorm(s);
+		norm = vectorNorm(s);
 		std::cout << "||s|| = " << norm << std::endl;
 		if (norm < tol) {
 			// x[k + 1] = x[k] + alpha[k] * p[k]

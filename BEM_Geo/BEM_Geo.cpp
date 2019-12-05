@@ -17,9 +17,7 @@ double uExact = GM / R; // exact surface potential
 double qExact = GM / (R * R); // surface acceleration
 
 const char* dataFilename = "BL-902.dat";
-// const char* dataFilename = "BL-1298.dat";
 // const char* dataFilename = "BL-3602.dat";
-// const char* dataFilename = "BL-8102.dat";
 const char* elemDataFilename = "elem_902.dat";
 // const char* elemDataFilename = "elem_3602.dat";
 const int N = 902; // dataset size;
@@ -475,25 +473,128 @@ int main() {
 
 	auto startMatrixGen = std::chrono::high_resolution_clock::now();
 
-	double** F = new double* [N];
-	double** G = new double* [N];
-	for (int i = 0; i < N; i++) {
-		F[i] = new double[N];
-		G[i] = new double[N];
-	}
+	std::cout << "Pre-computing F and G helpers ... " << std::endl;
+
+	double* nt_x = new double[(size_t)Nt_max * N];
+	double* nt_y = new double[(size_t)Nt_max * N];
+	double* nt_z = new double[(size_t)Nt_max * N];
+	double* A_t = new double[(size_t)Nt_max * N];
 
 	int Ntri, i, j, t, k;
-	double rx, ry, rz; // r_ij distance coords
-	double nx, ny, nz;
-	double x_ijk, y_ijk, z_ijk; // Gauss pts
-	double e0x, e0y, e0z, e1x, e1y, e1z, e2x, e2y, e2z; // triangle edges
-	double alpha_t, beta_t, l0_t, l1_t, l2_t; // singular triangle features (angle at vertex,  angle at adjacent vertex,  opposing edge length)
-	double A_t, K_ijt, norm;
-	double G_sum, F_sum, Gauss_sum_G, Gauss_sum_F;
-	double t0x, t0y, t0z, t1x, t1y, t1z, t2x, t2y, t2z;
 	int j1, j2;
+	double t0x, t0y, t0z, t1x, t1y, t1z, t2x, t2y, t2z;
+	double nx, ny, nz;
+	double norm;
 
+	double* G_diag = new double[N]; // diagonal (singular) elems of G-matrix
+
+	double e0x, e0y, e0z, e1x, e1y, e1z, e2x, e2y, e2z; // triangle edges
+	double l0_t, l1_t, l2_t, At;
+	double alpha, beta;
+
+	double x_ijk, y_ijk, z_ijk; // Gauss pts
+
+	double* r_ijk_x = new double[(size_t)Nt_max * NGauss * N];
+	double* r_ijk_y = new double[(size_t)Nt_max * NGauss * N];
+	double* r_ijk_z = new double[(size_t)Nt_max * NGauss * N];
+
+	for (j = 0; j < N; j++) {
+
+		Ntri = e[Nt_max * j];
+		G_diag[j] = 0.0;
+
+		for (t = 1; t <= Ntri; t++) {
+			// adjacent vertex indices
+			j1 = e[Nt_max * j + t];
+			j2 = e[Nt_max * j + t % Ntri + 1];
+
+			// ===================== Precompute normals ===========================
+			// tri verts
+			t0x = x[j];		t0y = y[j];		t0z = z[j];
+			t1x = x[j1];	t1y = y[j1];	t1z = z[j1];
+			t2x = x[j2];	t2y = y[j2];	t2z = z[j2];
+
+			// tri normal
+			nx = (t1y - t0y) * (t2z - t0z) - (t1z - t0z) * (t2y - t0y);
+			ny = (t1z - t0z) * (t2x - t0x) - (t1x - t0x) * (t2z - t0z);
+			nz = (t1x - t0x) * (t2y - t0y) - (t1y - t0y) * (t2x - t0x);
+
+			norm = sqrt(nx * nx + ny * ny + nz * nz);
+			assert(norm != 0.0);
+
+			nx /= norm;
+			ny /= norm;
+			nz /= norm;
+
+			nt_x[Nt_max * j + t] = nx;
+			nt_y[Nt_max * j + t] = ny;
+			nt_z[Nt_max * j + t] = nz;
+
+			// ==============  Pre-compute G-diagonal elems ===============================
+			// e0 = t0 -> t1
+			e0x = x[j1] - x[j];
+			e0y = y[j1] - y[j];
+			e0z = z[j1] - z[j];
+			// e1 = t1 -> t2
+			e1x = x[j2] - x[j1];
+			e1y = y[j2] - y[j1];
+			e1z = z[j2] - z[j1];
+			// e2 = t2 -> t0
+			e2x = x[j] - x[j2];
+			e2y = y[j] - y[j2];
+			e2z = z[j] - z[j2];
+
+			// edge lengths
+			l0_t = sqrt(e0x * e0x + e0y * e0y + e0z * e0z);
+			l1_t = sqrt(e1x * e1x + e1y * e1y + e1z * e1z);
+			l2_t = sqrt(e2x * e2x + e2y * e2y + e2z * e2z);
+
+			assert(l0_t != 0.0 && l1_t != 0.0 && l2_t != 0.0);
+
+			alpha = acos(-(e0x * e2x + e0y * e2y + e0z * e2z) / (l0_t * l2_t));
+			beta = acos(-(e0x * e1x + e0y * e1y + e0z * e1z) / (l0_t * l1_t));
+
+			assert(alpha != 0.0 && beta != 0.0);
+
+			At = 0.5 * norm; // triangle area
+
+			A_t[Nt_max * j + t] = At;
+			G_diag[j] += At / l1_t * log(tan(0.5 * (alpha + beta)) / tan(0.5 * beta));
+
+			// ====================== Pre-compute triangle Gauss' pts coords ========================
+			for (k = 0; k < NGauss; k++) {
+				x_ijk = etha_1[k] * x[j] + etha_2[k] * x[j1] + etha_3[k] * x[j2];
+				y_ijk = etha_1[k] * y[j] + etha_2[k] * y[j1] + etha_3[k] * y[j2];
+				z_ijk = etha_1[k] * z[j] + etha_2[k] * z[j1] + etha_3[k] * z[j2];
+
+				r_ijk_x[Nt_max * NGauss * j + NGauss * t + k] = x_ijk;
+				r_ijk_y[Nt_max * NGauss * j + NGauss * t + k] = y_ijk;
+				r_ijk_z[Nt_max * NGauss * j + NGauss * t + k] = z_ijk;
+			}
+		}
+	}
+
+	std::cout << "... Pre-computing done!" << std::endl << std::endl;
+
+	std::cout << "===> Filling F and rhs ..." << std::endl;
+
+	// Filling F and rhs:
+
+	double** F = new double* [N];
+	double* rhs = new double [N];
+
+// #pragma omp parallel for
+	for (i = 0; i < N; i++) F[i] = new double[N];
+
+	double rx, ry, rz; // r_ij distance coords
+	double K_ijt;
+	double G_sum, F_sum, Gauss_sum_G, Gauss_sum_F, G_ij, rhs_sum;
+
+// #pragma omp parallel for
 	for (i = 0; i < N; i++) {
+
+		rhs_sum = 0.0;
+
 		for (j = 0; j < N; j++) {
 			rx = x[j] - x[i];
 			ry = y[j] - y[i];
@@ -503,113 +604,52 @@ int main() {
 
 			G_sum = 0.0; F_sum = 0.0;
 
-			if (i == j) {
-				for (t = 1; t <= Ntri; t++) { // SINGULAR cycle through all j=i-adjacent triangles
-
-					// adjacent vertex indices
-					j1 = e[Nt_max * j + t];
-					j2 = e[Nt_max * j + t % Ntri + 1];
-
-					// compute edge coords
-					// e0 = t0 -> t1
-					e0x = x[j1] - x[j];
-					e0y = y[j1] - y[j];
-					e0z = z[j1] - z[j];
-					// e1 = t1 -> t2
-					e1x = x[j2] - x[j1];
-					e1y = y[j2] - y[j1];
-					e1z = z[j2] - z[j1];
-					// e2 = t2 -> t0
-					e2x = x[j] - x[j2];
-					e2y = y[j] - y[j2];
-					e2z = z[j] - z[j2];
-
-					// edge lengths
-					l0_t = sqrt(e0x * e0x + e0y * e0y + e0z * e0z);
-					l1_t = sqrt(e1x * e1x + e1y * e1y + e1z * e1z);
-					l2_t = sqrt(e2x * e2x + e2y * e2y + e2z * e2z);
-
-					assert(l0_t != 0.0 && l1_t != 0.0 && l2_t != 0.0);
-					
-					alpha_t = acos(-(e0x * e2x + e0y * e2y + e0z * e2z) / (l0_t * l2_t));
-					beta_t = acos(-(e0x * e1x + e0y * e1y + e0z * e1z) / (l0_t * l1_t));
-
-					// tri verts
-					t0x = x[j];		t0y = y[j];		t0z = z[j];
-					t1x = x[j1];	t1y = y[j1];	t1z = z[j1];
-					t2x = x[j2];	t2y = y[j2];	t2z = z[j2];
-
-					// tri normal
-					nx = (t1y - t0y) * (t2z - t0z) - (t1z - t0z) * (t2y - t0y);
-					ny = (t1z - t0z) * (t2x - t0x) - (t1x - t0x) * (t2z - t0z);
-					nz = (t1x - t0x) * (t2y - t0y) - (t1y - t0y) * (t2x - t0x);
-
-					norm = sqrt(nx * nx + ny * ny + nz * nz);
-					A_t = 0.5 * norm; // triangle area
-
-					assert(norm != 0.0);
-
-					G_sum += A_t / l1_t * log(tan(0.5 * (alpha_t + beta_t)) / tan(0.5 * beta_t));
-				}
+			if (i == j) { // SINGULAR elements
+				G_sum = G_diag[i];
 			}
 			else {
 				for (t = 1; t <= Ntri; t++) { // REGULAR cycle through all j-adjacent triangles
 
-					// adjacent vertex indices
-					j1 = e[Nt_max * j + t];
-					j2 = e[Nt_max * j + t % Ntri + 1];
 					Gauss_sum_G = 0.0;
 					Gauss_sum_F = 0.0;
 
 					for (k = 0; k < NGauss; k++) { // cycle through all Gauss pts of a triangle
 
-						x_ijk = etha_1[k] * x[j] + etha_2[k] * x[j1] + etha_3[k] * x[j2] - x[i];
-						y_ijk = etha_1[k] * y[j] + etha_2[k] * y[j1] + etha_3[k] * y[j2] - y[i];
-						z_ijk = etha_1[k] * z[j] + etha_2[k] * z[j1] + etha_3[k] * z[j2] - z[i];
+						x_ijk = r_ijk_x[Nt_max * NGauss * j + NGauss * t + k] - x[i];
+						y_ijk = r_ijk_y[Nt_max * NGauss * j + NGauss * t + k] - y[i];
+						z_ijk = r_ijk_z[Nt_max * NGauss * j + NGauss * t + k] - z[i];
 
 						norm = sqrt(x_ijk * x_ijk + y_ijk * y_ijk + z_ijk * z_ijk);
-
-						assert(norm != 0.0);
 
 						Gauss_sum_F += etha_1[k] / (norm * norm * norm) * w[k];
 						Gauss_sum_G += etha_1[k] / norm * w[k];
 					}
 
-					// tri verts
-					t0x = x[j];		t0y = y[j];		t0z = z[j];
-					t1x = x[j1];	t1y = y[j1];	t1z = z[j1];
-					t2x = x[j2];	t2y = y[j2];	t2z = z[j2];
+					// triangle area
+					At = A_t[Nt_max * j + t];
 
-					// tri normal
-					nx = (t1y - t0y) * (t2z - t0z) - (t1z - t0z) * (t2y - t0y);
-					ny = (t1z - t0z) * (t2x - t0x) - (t1x - t0x) * (t2z - t0z);
-					nz = (t1x - t0x) * (t2y - t0y) - (t1y - t0y) * (t2x - t0x);
-
-					norm = sqrt(nx * nx + ny * ny + nz * nz);
-					A_t = 0.5 * norm; // triangle area
-
-					assert(norm != 0.0);
-
-					nx /= norm;
-					ny /= norm;
-					nz /= norm;
+					nx = nt_x[Nt_max * j + t];
+					ny = nt_y[Nt_max * j + t];
+					nz = nt_z[Nt_max * j + t];
 
 					K_ijt = fabs(rx * nx + ry * ny + rz * nz);
-					// K_ijt = rx * nx + ry * ny + rz * nz;
 
-					// assert(K_ijt >= 0.0);
-
-					G_sum += A_t * Gauss_sum_G;
-					F_sum += A_t * K_ijt * Gauss_sum_F;
+					G_sum += At * Gauss_sum_G;
+					F_sum += At * K_ijt * Gauss_sum_F;
 				}
-				// ------- end regular triangle cycle --------
+				// ------------- end regular triangle cycle ------------------
 			}
 
-			G[i][j] = 1.0 / (4 * M_PI) * G_sum;
+			G_ij = 1.0 / (4 * M_PI) * G_sum;
 			F[i][j] = 1.0 / (4 * M_PI) * F_sum;
+
+			rhs_sum += G_ij * q[j];
 		}
+
+		rhs[i] = rhs_sum;
 	}
 
+// #pragma omp parallel for
 	for (i = 0; i < N; i++) { // filling in the diagonal terms of F
 
 		F_sum = 0.0;
@@ -625,23 +665,14 @@ int main() {
 
 	auto endMatrixGen = std::chrono::high_resolution_clock::now();
 
-	// ================ rhs = G . q ===============================================
-
-	double* rhs = new double[N];
-
-	for (i = 0; i < N; i++) {
-		G_sum = 0.0;
-		for (j = 0; j < N; j++) {
-			G_sum += G[i][j] * q[j];
-		}
-		rhs[i] = G_sum;
-	}
+	delete[] nt_x; delete[] nt_y; delete[] nt_z;
+	delete[] G_diag; delete[] A_t;
+	delete[] r_ijk_x; delete[] r_ijk_y; delete[] r_ijk_z;
 
 
 	auto startMatrixPrint = std::chrono::high_resolution_clock::now();
 	printArray2("F", F, 4);
 	auto endMatrixPrint = std::chrono::high_resolution_clock::now();
-	printArray2("G", G, 4);
 	printArray1("rhs", rhs, 4, false);
 
 	// ============================================================================================================
@@ -677,13 +708,15 @@ int main() {
 	double* tmp1 = new double[N];
 
 	// iter scalars
-	double alpha, beta, omega;
+	double omega;
 
 	// x0 = (1000,1000,...,1000)
+#pragma omp parallel for
 	for (int i = 0; i < N; i++) x_curr[i] = 600000.;
 	// r0 = b - A x0
 	// choose rp0 such that <r0, rp0> != 0
 	// p0 = r0
+#pragma omp parallel for
 	for (int i = 0; i < N; i++) {
 		r_curr[i] = rhs[i];
 		for (int j = 0; j < N; j++) {
@@ -708,6 +741,7 @@ int main() {
 		// alpha[k] = <r[k], rp0> / <Ap[k], rp0>
 
 		double num = 0.; double den = 0.;
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			tmp[i] = 0.;
 			for (int j = 0; j < N; j++) {
@@ -719,7 +753,7 @@ int main() {
 		alpha = num / den;
 
 		// s[k] = r[k] - alpha[k] * A p[k]
-
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			s[i] = r_curr[i] - alpha * tmp[i];
 		}
@@ -728,7 +762,7 @@ int main() {
 		std::cout << "||s|| = " << norm << std::endl;
 		if (norm < tol) {
 			// x[k + 1] = x[k] + alpha[k] * p[k]
-
+#pragma omp parallel for
 			for (int i = 0; i < N; i++) {
 				x_next[i] = x_curr[i] + alpha * p_curr[i];
 			}
@@ -740,6 +774,7 @@ int main() {
 		// omega[k] = <A s[k], s[k]> / <A s[k], A s[k]>
 
 		num = 0; den = 0;
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			tmp[i] = 0;
 			for (int j = 0; j < N; j++) {
@@ -751,13 +786,13 @@ int main() {
 		omega = num / den;
 
 		// x[k + 1] = x[k] + alpha[k] * p[k] + omega[k] * s[k]
-
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			x_next[i] = x_curr[i] + alpha * p_curr[i] + omega * s[i];
 		}
 
 		// r[k + 1] = s[k] - omega[k] * A s[k]
-
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			r_next[i] = s[i] - omega * tmp[i];
 		}
@@ -772,6 +807,7 @@ int main() {
 		// beta[k] = (alpha[k] / omega[k]) * <r[k + 1], rp0> / <r[k], rp0>
 
 		num = 0; den = 0;
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			num += r_next[i] * rp0[i];
 			den += r_curr[i] * rp0[i];
@@ -780,7 +816,7 @@ int main() {
 		beta = (alpha / omega) * num / den;
 
 		// p[k + 1] = r[k + 1] + beta[k] * (p[k] - omega[k] * A p[k])
-
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			tmp[i] = 0;
 			for (int j = 0; j < N; j++) {
@@ -793,13 +829,13 @@ int main() {
 		std::cout << "|< r[k + 1], rp0 >| = " << norm << std::endl;
 		if (norm < tol) {
 			// rp0 = r[k + 1]; p[k + 1] = r[k + 1]
-
+#pragma omp parallel for
 			for (int i = 0; i < N; i++) {
 				rp0[i] = r_next[i]; p_next[i] = r_next[i];
 			}
 		}
 		// current = next
-
+#pragma omp parallel for
 		for (int i = 0; i < N; i++) {
 			x_curr[i] = x_next[i];
 			r_curr[i] = r_next[i];
@@ -810,6 +846,7 @@ int main() {
 	}
 
 	// result: x = x_next
+#pragma omp parallel for
 	for (int i = 0; i < N; i++) u[i] = x_next[i];
 
 	// clean up
@@ -849,7 +886,7 @@ int main() {
 	std::cout << "printing matrix array :    " << elapsedPrintMatrix.count() << " s" << std::endl;
 	std::cout << "..........................................................................." << std::endl;
 	std::chrono::duration<double> elapsedMatrixGen = (endMatrixGen - startMatrixGen);
-	std::cout << "generating system matrix :    " << elapsedMatrixGen.count() << " s" << std::endl;
+	std::cout << "generating BEM system matrix :    " << elapsedMatrixGen.count() << " s" << std::endl;
 	std::cout << ".... Bi-CGSTAB: .........................................................." << std::endl;
 	std::chrono::duration<double> elapsedBi_CGSTAB = (endBi_CGSTAB - startBi_CGSTAB);
 	std::cout << "Bi-CGSTAB solution :    " << elapsedBi_CGSTAB.count() << " s" << std::endl;
@@ -860,10 +897,8 @@ int main() {
 	delete[] x; delete[] y; delete[] z;
 	delete[] q; delete[] d2U;
 
-	for (int i = 0; i < N; i++) {
-		delete[] F[i]; delete[] G[i];
-	}
-	delete[] F; delete[] G;
+	for (int i = 0; i < N; i++) delete[] F[i];
+	delete[] F;
 
 	return 1;
 }

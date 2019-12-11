@@ -583,14 +583,14 @@ int main() {
 	double** F = new double* [N];
 	double* rhs = new double [N];
 
-// #pragma omp parallel for
+#pragma omp parallel for
 	for (i = 0; i < N; i++) F[i] = new double[N];
 
 	double rx, ry, rz; // r_ij distance coords
 	double K_ijt;
 	double G_sum, F_sum, Gauss_sum_G, Gauss_sum_F, G_ij, rhs_sum;
 
-// #pragma omp parallel for
+#pragma omp parallel for
 	for (i = 0; i < N; i++) {
 
 		rhs_sum = 0.0;
@@ -649,7 +649,7 @@ int main() {
 		rhs[i] = rhs_sum;
 	}
 
-// #pragma omp parallel for
+#pragma omp parallel for
 	for (i = 0; i < N; i++) { // filling in the diagonal terms of F
 
 		F_sum = 0.0;

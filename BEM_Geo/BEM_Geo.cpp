@@ -100,7 +100,7 @@ void printArray1FromTo(std::string name, double* a, int from, int to, int printL
 			std::cout << " " << a[i];
 		}
 		std::cout << "  ... ";
-		for (int i = to - printLim; i < to; i++) {
+		for (int i = to - printLim; i <= to; i++) {
 			std::cout << " " << a[i];
 		}
 		std::cout << std::endl;
@@ -112,7 +112,7 @@ void printArray1FromTo(std::string name, double* a, int from, int to, int printL
 			std::cout << offset << a[i] << std::endl;
 		}
 		for (int i = 0; i < 3; i++) std::cout << offset << "  ." << std::endl;
-		for (int i = to - printLim; i < to; i++) {
+		for (int i = to - printLim; i <= to; i++) {
 			std::cout << offset << a[i] << std::endl;
 		}
 		std::cout << std::endl;
@@ -416,7 +416,7 @@ int main(int argc, char** argv) {
 				nz = (t1x - t0x) * (t2y - t0y) - (t1y - t0y) * (t2x - t0x);
 
 				norm = sqrt(nx * nx + ny * ny + nz * nz);
-				assert(norm != 0.0);
+				assert(norm > 0.0);
 
 				nx /= norm;
 				ny /= norm;
@@ -485,6 +485,54 @@ int main(int argc, char** argv) {
 	MPI_Bcast(r_ijk_y, Nt_max * NGauss * N, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	MPI_Bcast(r_ijk_z, Nt_max * NGauss * N, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
+	bool writeIntermediate = false;
+	if (myrank == 0 && writeIntermediate) {
+		// write intermediate results
+
+		// write triangle data
+		std::fstream dataOut;
+		dataOut.open("triangle.dat", std::fstream::out);
+		if (!dataOut.is_open()) {
+			std::cout << "unable to open output file intermediate.dat!" << std::endl;
+			return 0;
+		}
+
+		dataOut << "nt_x   nt_y   nt_z   A_t" << std::endl;
+		for (int i = 0; i < N * Nt_max; i++) {
+			dataOut << nt_x[i] << " " << nt_y[i] << " " << nt_z[i] << " " << A_t[i] << std::endl;
+		}
+
+		dataOut.close();
+
+		// write G_diag
+		dataOut.open("Gdiag.dat", std::fstream::out);
+		if (!dataOut.is_open()) {
+			std::cout << "unable to open output file Gdiag.dat!" << std::endl;
+			return 0;
+		}
+
+		dataOut << "G_diag" << std::endl;
+		for (int i = 0; i < N; i++) {
+			dataOut << G_diag[i] << std::endl;
+		}
+
+		dataOut.close();
+
+		// write Gauss pts
+		dataOut.open("tGauss.dat", std::fstream::out);
+		if (!dataOut.is_open()) {
+			std::cout << "unable to open output file tGauss.dat!" << std::endl;
+			return 0;
+		}
+
+		dataOut << "r_ijk_x   r_ijk_y   r_ijk_z" << std::endl;
+		for (int i = 0; i < N * Nt_max * NGauss; i++) {
+			dataOut << r_ijk_x[i] << " " << r_ijk_y[i] << " " << r_ijk_z[i] << std::endl;
+		}
+
+		dataOut.close();
+	}
+
 	if (myrank == 0) std::cout << "===> Filling F and rhs ..." << std::endl;
 
 	// Filling F and rhs:
@@ -499,7 +547,7 @@ int main(int argc, char** argv) {
 	for (int i = 0; i < nlocal; i++) {
 		iGlobal = i + istart;
 
-		double rhs_sum = 0.0;
+		rhs_local[i] = 0.0;
 
 		for (int j = 0; j < N; j++) {
 			double rx = x[j] - x[iGlobal];
@@ -534,11 +582,15 @@ int main(int argc, char** argv) {
 					// triangle area
 					double At = A_t[Nt_max * j + t];
 
+					if (At < 0.0) std::cout << "At = " << At << "!\n";
+
 					double nx = nt_x[Nt_max * j + t];
 					double ny = nt_y[Nt_max * j + t];
 					double nz = nt_z[Nt_max * j + t];
 
 					double K_ijt = fabs(rx * nx + ry * ny + rz * nz);
+
+					if (K_ijt < 0.0) std::cout << "K_ijt = " << K_ijt << "!\n";
 
 					G_sum += At * Gauss_sum_G;
 					F_sum += At * K_ijt * Gauss_sum_F;
@@ -549,10 +601,8 @@ int main(int argc, char** argv) {
 			double G_ij = 1.0 / (4 * M_PI) * G_sum;
 			F_local[i][j] = 1.0 / (4 * M_PI) * F_sum;
 
-			rhs_sum += G_ij * q[j];
+			rhs_local[i] += G_ij * q[j];
 		}
-
-		rhs_local[i] = rhs_sum;
 	}
 
 	iGlobal = 0;
@@ -561,9 +611,10 @@ int main(int argc, char** argv) {
 		double F_sum = 0.0;
 
 		for (int j = 0; j < N; j++) {
-			if (i == j) continue;
-
-			F_sum += F_local[i][j];
+			
+			if (iGlobal != j) {
+				F_sum += F_local[i][j];
+			}			
 		}
 
 		F_diag[iGlobal] = F_local[i][i] = 1.0 - F_sum;
@@ -573,8 +624,8 @@ int main(int argc, char** argv) {
 
 	auto endMatrixGen = std::chrono::high_resolution_clock::now();
 
-	printArray1FromTo("F_diag", F_diag, istart, istart + nlocal, 4);
-	printArray1FromTo("rhs", rhs, istart, istart + nlocal, 4);
+	printArray1FromTo("F_diag", F_diag, istart, iend, 4);
+	printArray1FromTo("rhs", rhs, istart, iend, 4);
 
 	// ============================================================================================================
 	// ========== END BOUNDARY ELEM METHOD ========================================================================
